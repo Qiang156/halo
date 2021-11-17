@@ -2,7 +2,6 @@ package run.halo.app.service.impl;
 
 import static org.springframework.data.domain.Sort.Direction.DESC;
 
-import cn.hutool.core.util.URLUtil;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -54,6 +53,7 @@ import run.halo.app.service.OptionService;
 import run.halo.app.service.UserService;
 import run.halo.app.service.base.AbstractCrudService;
 import run.halo.app.service.base.BaseCommentService;
+import run.halo.app.utils.HaloUtils;
 import run.halo.app.utils.ServiceUtils;
 import run.halo.app.utils.ServletUtils;
 import run.halo.app.utils.ValidationUtils;
@@ -291,6 +291,12 @@ public abstract class BaseCommentServiceImpl<COMMENT extends BaseComment>
     }
 
     @Override
+    public long countByStatusAndPostId(@NonNull CommentStatus status, @NonNull Integer postId) {
+        Assert.notNull(postId, "Post id must not be null");
+        return baseCommentRepository.countByStatusAndPostId(status, postId);
+    }
+
+    @Override
     public long countByStatus(@NonNull CommentStatus status) {
         return baseCommentRepository.countByStatus(status);
     }
@@ -328,7 +334,7 @@ public abstract class BaseCommentServiceImpl<COMMENT extends BaseComment>
         }
 
         if (StringUtils.isNotEmpty(comment.getAuthorUrl())) {
-            comment.setAuthorUrl(URLUtil.normalize(comment.getAuthorUrl()));
+            comment.setAuthorUrl(HaloUtils.normalizeUrl(comment.getAuthorUrl()));
         }
 
         if (authentication != null) {
@@ -770,6 +776,6 @@ public abstract class BaseCommentServiceImpl<COMMENT extends BaseComment>
         final String gravatarDefault =
             optionService.getByPropertyOrDefault(CommentProperties.GRAVATAR_DEFAULT, String.class);
 
-        return gravatarSource + gravatarMd5 + "?d=" + gravatarDefault;
+        return gravatarSource + gravatarMd5 + "?s=256&d=" + gravatarDefault;
     }
 }

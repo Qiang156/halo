@@ -3,9 +3,6 @@ package run.halo.app.service.impl;
 import static org.springframework.data.domain.Sort.Direction.DESC;
 import static run.halo.app.model.support.HaloConst.URL_SEPARATOR;
 
-import cn.hutool.core.collection.CollectionUtil;
-import cn.hutool.core.date.DateUtil;
-import cn.hutool.core.util.StrUtil;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collection;
@@ -19,11 +16,13 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+import javax.persistence.criteria.CriteriaBuilder.In;
 import javax.persistence.criteria.Predicate;
 import javax.persistence.criteria.Root;
 import javax.persistence.criteria.Subquery;
 import javax.validation.constraints.NotNull;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
@@ -72,6 +71,7 @@ import run.halo.app.service.PostService;
 import run.halo.app.service.PostTagService;
 import run.halo.app.service.TagService;
 import run.halo.app.utils.DateUtils;
+import run.halo.app.utils.HaloUtils;
 import run.halo.app.utils.MarkdownUtils;
 import run.halo.app.utils.ServiceUtils;
 import run.halo.app.utils.SlugUtils;
@@ -151,7 +151,7 @@ public class PostServiceImpl extends BasePostServiceImpl<Post> implements PostSe
 
         PostQuery postQuery = new PostQuery();
         postQuery.setKeyword(keyword);
-        postQuery.setStatus(PostStatus.PUBLISHED);
+        postQuery.setStatuses(Set.of(PostStatus.PUBLISHED));
 
         // Build specification and find all
         return postRepository.findAll(buildSpecByQuery(postQuery), pageable);
@@ -382,9 +382,9 @@ public class PostServiceImpl extends BasePostServiceImpl<Post> implements PostSe
             for (String key : frontMatter.keySet()) {
                 elementValue = frontMatter.get(key);
                 for (String ele : elementValue) {
-                    ele = StrUtil.strip(ele, "[", "]");
-                    ele = StrUtil.strip(ele, "\"");
-                    ele = StrUtil.strip(ele, "\'");
+                    ele = HaloUtils.strip(ele, "[", "]");
+                    ele = StringUtils.strip(ele, "\"");
+                    ele = StringUtils.strip(ele, "\'");
                     if ("".equals(ele)) {
                         continue;
                     }
@@ -393,7 +393,7 @@ public class PostServiceImpl extends BasePostServiceImpl<Post> implements PostSe
                             post.setTitle(ele);
                             break;
                         case "date":
-                            post.setCreateTime(DateUtil.parse(ele));
+                            post.setCreateTime(DateUtils.parseDate(ele));
                             break;
                         case "permalink":
                             post.setSlug(ele);
@@ -411,13 +411,17 @@ public class PostServiceImpl extends BasePostServiceImpl<Post> implements PostSe
                             Tag tag;
                             for (String tagName : ele.split(",")) {
                                 tagName = tagName.trim();
-                                tagName = StrUtil.strip(tagName, "\"");
-                                tagName = StrUtil.strip(tagName, "\'");
+                                tagName = StringUtils.strip(tagName, "\"");
+                                tagName = StringUtils.strip(tagName, "\'");
                                 tag = tagService.getByName(tagName);
+                                String slug = SlugUtils.slug(tagName);
+                                if (null == tag) {
+                                    tag = tagService.getBySlug(slug);
+                                }
                                 if (null == tag) {
                                     tag = new Tag();
                                     tag.setName(tagName);
-                                    tag.setSlug(SlugUtils.slug(tagName));
+                                    tag.setSlug(slug);
                                     tag = tagService.create(tag);
                                 }
                                 tagIds.add(tag.getId());
@@ -427,8 +431,8 @@ public class PostServiceImpl extends BasePostServiceImpl<Post> implements PostSe
                             Integer lastCategoryId = null;
                             for (String categoryName : ele.split(",")) {
                                 categoryName = categoryName.trim();
-                                categoryName = StrUtil.strip(categoryName, "\"");
-                                categoryName = StrUtil.strip(categoryName, "\'");
+                                categoryName = StringUtils.strip(categoryName, "\"");
+                                categoryName = StringUtils.strip(categoryName, "\'");
                                 Category category = categoryService.getByName(categoryName);
                                 if (null == category) {
                                     category = new Category();
@@ -785,7 +789,8 @@ public class PostServiceImpl extends BasePostServiceImpl<Post> implements PostSe
         postDetailVO.setMetaIds(metaIds);
         postDetailVO.setMetas(postMetaService.convertTo(postMetaList));
 
-        postDetailVO.setCommentCount(postCommentService.countByPostId(post.getId()));
+        postDetailVO.setCommentCount(postCommentService.countByStatusAndPostId(
+            CommentStatus.PUBLISHED, post.getId()));
 
         postDetailVO.setFullPath(buildFullPath(post));
 
@@ -805,8 +810,9 @@ public class PostServiceImpl extends BasePostServiceImpl<Post> implements PostSe
         return (root, query, criteriaBuilder) -> {
             List<Predicate> predicates = new LinkedList<>();
 
-            if (postQuery.getStatus() != null) {
-                predicates.add(criteriaBuilder.equal(root.get("status"), postQuery.getStatus()));
+            Set<PostStatus> statuses = postQuery.getStatuses();
+            if (!CollectionUtils.isEmpty(statuses)) {
+                predicates.add(root.get("status").in(statuses));
             }
 
             if (postQuery.getCategoryId() != null) {
@@ -843,7 +849,7 @@ public class PostServiceImpl extends BasePostServiceImpl<Post> implements PostSe
 
         // Create or update post
         Boolean needEncrypt = Optional.ofNullable(categoryIds)
-            .filter(CollectionUtil::isNotEmpty)
+            .filter(HaloUtils::isNotEmpty)
             .map(categoryIdSet -> {
                 for (Integer categoryId : categoryIdSet) {
                     if (categoryService.categoryHasEncrypt(categoryId)) {
@@ -996,11 +1002,11 @@ public class PostServiceImpl extends BasePostServiceImpl<Post> implements PostSe
 
         String archivesPrefix = optionService.getArchivesPrefix();
 
-        int month = DateUtil.month(post.getCreateTime()) + 1;
+        int month = DateUtils.month(post.getCreateTime()) + 1;
 
         String monthString = month < 10 ? "0" + month : String.valueOf(month);
 
-        int day = DateUtil.dayOfMonth(post.getCreateTime());
+        int day = DateUtils.dayOfMonth(post.getCreateTime());
 
         String dayString = day < 10 ? "0" + day : String.valueOf(day);
 
@@ -1021,14 +1027,14 @@ public class PostServiceImpl extends BasePostServiceImpl<Post> implements PostSe
             fullPath.append("?p=")
                 .append(post.getId());
         } else if (permalinkType.equals(PostPermalinkType.DATE)) {
-            fullPath.append(DateUtil.year(post.getCreateTime()))
+            fullPath.append(DateUtils.year(post.getCreateTime()))
                 .append(URL_SEPARATOR)
                 .append(monthString)
                 .append(URL_SEPARATOR)
                 .append(post.getSlug())
                 .append(pathSuffix);
         } else if (permalinkType.equals(PostPermalinkType.DAY)) {
-            fullPath.append(DateUtil.year(post.getCreateTime()))
+            fullPath.append(DateUtils.year(post.getCreateTime()))
                 .append(URL_SEPARATOR)
                 .append(monthString)
                 .append(URL_SEPARATOR)
@@ -1037,7 +1043,7 @@ public class PostServiceImpl extends BasePostServiceImpl<Post> implements PostSe
                 .append(post.getSlug())
                 .append(pathSuffix);
         } else if (permalinkType.equals(PostPermalinkType.YEAR)) {
-            fullPath.append(DateUtil.year(post.getCreateTime()))
+            fullPath.append(DateUtils.year(post.getCreateTime()))
                 .append(URL_SEPARATOR)
                 .append(post.getSlug())
                 .append(pathSuffix);
